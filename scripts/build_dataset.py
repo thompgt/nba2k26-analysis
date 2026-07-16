@@ -2,10 +2,13 @@
 
 There's no shared player ID across these three sources (2kratings.com slugs,
 stats.nba.com PLAYER_ID, HoopsHype's internal player IDs), so matching is done
-by normalized full-name similarity (rapidfuzz), same approach as fifa-analysis's
-`build_dataset.py`. Unlike the FIFA project we don't block by age (2K bio ages
-aren't always populated/reliable for recent debuts), so we lean a bit harder on
-the match-score threshold and take the single best match per player.
+by normalized full-name similarity (rapidfuzz), blocked by age (+/-1 year),
+same approach as fifa-analysis's `build_dataset.py`. Age blocking matters a
+lot here: common first/last-name combinations are common enough in a
+500-player league that unblocked fuzzy matching produces real false
+positives (e.g. "Jaylen Nowell" incorrectly matching to "Jaylen Wells",
+"Keon Johnson" to "Keldon Johnson") that a plain similarity-score threshold
+doesn't reliably catch.
 
 A player traded mid-season appears multiple times in the NBA stats table (one
 row per team + a "TOT" combined row); we keep the TOT row when present so each
@@ -28,7 +31,7 @@ from rapidfuzz import fuzz, process
 RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
 PROC_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "processed")
 
-NAME_MATCH_THRESHOLD = 88
+NAME_MATCH_THRESHOLD = 85
 
 
 def normalize_name(name):
@@ -75,6 +78,13 @@ def load_2k():
     # there's no rating to validate.
     df = df.dropna(subset=["overall"]).copy()
     df["name_norm"] = df["name"].map(normalize_name)
+    # Approximate age as of the 2025-26 season (players are captured at
+    # different points in the season, so this is +/- a few months) for
+    # age-blocked fuzzy matching below -- this is what catches "Jaylen
+    # Nowell" vs "Jaylen Wells"-style near-miss false matches on common
+    # first/last name combinations.
+    dob = pd.to_datetime(df["birthdate"], errors="coerce")
+    df["age_2k"] = ((pd.Timestamp("2025-12-01") - dob).dt.days // 365)
     return df
 
 
@@ -96,20 +106,51 @@ def load_salaries():
     return df
 
 
-def fuzzy_match(left, right, right_name_col="name_norm"):
+def fuzzy_match(left, right, right_name_col="name_norm", left_age_col=None, right_age_col=None, age_tol=1):
     """For each row in `left`, find the best-matching row index in `right`
     by normalized-name similarity. Returns (matched_idx, score) Series aligned
     to left.index.
+
+    If `left_age_col`/`right_age_col` are given, candidates are blocked to
+    within `age_tol` years -- this is what keeps common first/last-name
+    combinations (e.g. "Jaylen Nowell" vs "Jaylen Wells", "Keon Johnson" vs
+    "Keldon Johnson") from fuzzy-matching to the wrong real player. Rows with
+    a missing age fall back to an unblocked match.
     """
-    choices = right[right_name_col].tolist()
-    choice_idx = right.index.tolist()
+    use_age_blocking = left_age_col is not None and right_age_col is not None
 
     matched_idx = pd.Series(index=left.index, dtype="float64")
     scores = pd.Series(index=left.index, dtype="float64")
 
-    for i, name in left["name_norm"].items():
+    if use_age_blocking:
+        right_by_age = {}
+        for age, sub in right.groupby(right_age_col):
+            if pd.isna(age):
+                continue
+            right_by_age[int(age)] = sub
+
+    all_choices = right[right_name_col].tolist()
+    all_choice_idx = right.index.tolist()
+
+    for i, row in left.iterrows():
+        name = row["name_norm"]
         if not name:
             continue
+
+        candidates = right
+        if use_age_blocking:
+            age = row.get(left_age_col)
+            if pd.notna(age):
+                age = int(age)
+                parts = [right_by_age.get(a) for a in range(age - age_tol, age + age_tol + 1)]
+                parts = [p for p in parts if p is not None]
+                candidates = pd.concat(parts) if parts else right.iloc[0:0]
+
+        if candidates.empty:
+            continue
+        choices = candidates[right_name_col].tolist() if use_age_blocking else all_choices
+        choice_idx = candidates.index.tolist() if use_age_blocking else all_choice_idx
+
         best = process.extractOne(name, choices, scorer=fuzz.token_sort_ratio)
         if best and best[1] >= NAME_MATCH_THRESHOLD:
             matched_idx.loc[i] = choice_idx[best[2]]
@@ -127,8 +168,19 @@ def main():
 
     ratings.to_csv(os.path.join(PROC_DIR, "players_2k26_clean.csv"), index=False)
 
-    stats_idx, stats_scores = fuzzy_match(ratings, stats)
-    sal_idx, sal_scores = fuzzy_match(ratings, salaries)
+    stats_idx, stats_scores = fuzzy_match(
+        ratings, stats, left_age_col="age_2k", right_age_col="AGE",
+    )
+
+    # Salaries have no age column of their own; borrow one via an exact
+    # normalized-name lookup against the (reliable, real) NBA stats table so
+    # the ratings<->salary match can also be age-blocked.
+    age_lookup = stats.drop_duplicates("name_norm").set_index("name_norm")["AGE"]
+    salaries = salaries.copy()
+    salaries["age_ref"] = salaries["name_norm"].map(age_lookup)
+    sal_idx, sal_scores = fuzzy_match(
+        ratings, salaries, left_age_col="age_2k", right_age_col="age_ref",
+    )
 
     merged = ratings.copy()
     merged["stats_match_score"] = stats_scores
