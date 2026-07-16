@@ -42,8 +42,38 @@ def normalize_name(name):
     return name
 
 
+def _fix_misparsed_attribute_columns(df):
+    """A handful of archived pages (~3%) had an extra hidden badge digit
+    between an attribute's value and its label, which an earlier version of
+    the scraper's parser folded into the column name instead of the label,
+    e.g. producing a `6_close_shot` column (value correct, name wrong)
+    instead of populating `close_shot` for that row. Fold any `<digits>_<attr>`
+    column back into its real `<attr>` column (fixed at the source in
+    `scrape_2k_ratings.py` for future scrapes; this repairs already-scraped
+    data without a full re-scrape).
+    """
+    import re
+
+    misparsed = [c for c in df.columns if re.match(r"^\d+_[a-z_]+$", c)]
+    for col in misparsed:
+        real_col = re.sub(r"^\d+_", "", col)
+        if real_col in df.columns:
+            df[real_col] = df[real_col].combine_first(df[col])
+        else:
+            df[real_col] = df[col]
+    return df.drop(columns=misparsed)
+
+
 def load_2k():
     df = pd.read_csv(os.path.join(RAW_DIR, "2k26_ratings.csv"))
+    # Drop the site's non-player utility pages (filter/comparison tools) that
+    # slipped through the slug-based exclusion list into early scrapes.
+    df = df[~df["name"].str.contains("Filter Tool|Comparison Tool", na=False)]
+    df = _fix_misparsed_attribute_columns(df)
+    # A small number of very-recent draftees had a 2kratings.com page archived
+    # before their initial rating was published (no Overall yet) -- drop them,
+    # there's no rating to validate.
+    df = df.dropna(subset=["overall"]).copy()
     df["name_norm"] = df["name"].map(normalize_name)
     return df
 
