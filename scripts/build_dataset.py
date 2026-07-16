@@ -73,6 +73,13 @@ def load_2k():
     # slipped through the slug-based exclusion list into early scrapes.
     df = df[~df["name"].str.contains("Filter Tool|Comparison Tool", na=False)]
     df = _fix_misparsed_attribute_columns(df)
+    # Some single-position players' bio text has no "Archetype:" label between
+    # Position and Height, so the position-parsing window swallowed the next
+    # field's label (e.g. position2 ends up as literally "Height:"). Blank out
+    # any bio text field that looks like it captured a stray "<Label>:" token.
+    bio_text_cols = ["position", "position2", "archetype", "nationality", "team", "college", "hometown"]
+    for col in bio_text_cols:
+        df.loc[df[col].astype(str).str.match(r"^[A-Za-z() ]+:$", na=False), col] = np.nan
     # A small number of very-recent draftees had a 2kratings.com page archived
     # before their initial rating was published (no Overall yet) -- drop them,
     # there's no rating to validate.
