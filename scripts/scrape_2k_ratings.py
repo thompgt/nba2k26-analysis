@@ -58,6 +58,7 @@ EXCLUDE_SLUGS = {
     "mynba-eras", "countries", "updates", "wp-content", "wp-json", "category", "tag",
     "author", "page", "confirm-email", "about", "contact", "privacy", "terms",
     "wnba-current-teams", "all-star", "draft", "rosters",
+    "attributes-filter", "badges-filter", "compare-players",
 }
 
 # Attribute categories and the sub-attributes under them, in the order they
@@ -178,6 +179,10 @@ def _split_value_label(box, full_text):
     label = full_text
     if label.startswith(value_text):
         label = label[len(value_text):].strip()
+    # A few rows have an extra hidden badge/exponent digit between the value
+    # and the label (e.g. "93 6 Close Shot"); strip any further leading
+    # digits/punctuation so the label starts at the first letter.
+    label = re.sub(r"^[\d,\s]+", "", label)
     return label
 
 

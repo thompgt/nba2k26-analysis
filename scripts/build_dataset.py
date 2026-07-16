@@ -107,10 +107,14 @@ def main():
     stats_cols = [c for c in stats.columns if c not in ("name_norm", "is_tot")]
     stats_lookup = stats[stats_cols].copy()
     stats_lookup.columns = ["nba_" + c.lower() if c not in ("PLAYER_ID",) else "nba_player_id" for c in stats_cols]
-    merged = merged.join(stats_lookup, on=stats_idx)
+    stats_aligned = stats_lookup.reindex(stats_idx).reset_index(drop=True)
+    stats_aligned.index = merged.index
+    merged = pd.concat([merged, stats_aligned], axis=1)
 
     sal_lookup = salaries[["salary_usd", "player_option", "team_option", "two_way_contract"]].copy()
-    merged = merged.join(sal_lookup, on=sal_idx)
+    sal_aligned = sal_lookup.reindex(sal_idx).reset_index(drop=True)
+    sal_aligned.index = merged.index
+    merged = pd.concat([merged, sal_aligned], axis=1)
 
     match_stats = {
         "players_2k26": int(len(ratings)),
