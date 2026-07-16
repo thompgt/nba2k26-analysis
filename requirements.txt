@@ -1,0 +1,14 @@
+pandas
+numpy
+scipy
+scikit-learn
+matplotlib
+seaborn
+statsmodels
+requests
+beautifulsoup4
+curl_cffi
+rapidfuzz
+nba_api
+jupyter
+nbconvert
