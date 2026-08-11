@@ -121,6 +121,12 @@ backed up.
 ## Project structure
 
 ```
+nba2k/                       shared analysis package (imported by notebooks + scripts)
+  constants.py                 attribute lists, thresholds, cluster names, random state
+  data.py                      load_merged() and the sample filters
+  metrics.py                   rating residuals, moneyball value, BH correction, bootstrap CIs
+  clustering.py                k-means + centroid-profile-based cluster naming
+tests/                       pytest suite over nba2k/ and the committed dataset
 scripts/                     data acquisition + processing pipeline
   polite_http.py               robots.txt-aware, identifying, backing-off HTTP layer
   scrape_2k_ratings.py         scrapes NBA 2K26 player attributes via Wayback Machine
