@@ -121,8 +121,9 @@ a per-possession rate does not care how many possessions you were available
 for. The best-value column is structurally dominated by the CBA's salary floor:
 a minimum contract is the same price whether the player is useless or a
 rotation regular, so any minimum-salary player who logs real minutes lands
-there. Notebook 04 repeats the exercise restricted to prime-age (25-32) players
-to strip out the rookie-scale distortion.
+there. Notebook 04 repeats the exercise restricted to prime-age (25-32) players,
+and - since the salary floor applies at every age - also splits by salary
+quartile, so you can see which *expensive* contracts actually paid off.
 
 ![Scatter plot of real 2025-26 production volume (PIE x minutes) vs real salary, both on log scales, colored green to red by value score, with the best and worst value players labeled](images/03_moneyball_value.png)
 *Season impact volume (PIE x minutes) vs. real salary, both log scale - green points deliver more production per dollar than the league-wide fit predicts, red points less.*
