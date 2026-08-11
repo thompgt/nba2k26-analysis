@@ -36,27 +36,49 @@ one is pulled from.
 The single strongest sanity check: among players with at least 500 minutes
 played, 2K26's `overall` rating correlates strongly with real 2025-26 PIE
 (Player Impact Estimate), a well-known real on/off-court impact box-score
-metric (Pearson r = 0.70, Spearman rho = 0.63, n = 238). `overall` correlates
-even more strongly with real salary (r = 0.84) - and in a regression, `overall`
-alone explains far more of the variance in log salary than a player's age
-does, so the rating is capturing a real, market-relevant skill signal rather
-than just reputation or seniority.
+metric (Pearson r = 0.70, Spearman rho = 0.63, n = 239). That headline number
+is not an artefact of the 500-minute cut: r runs 0.69 / 0.71 / 0.70 / 0.72 /
+0.74 at floors of 0 / 250 / 500 / 1000 / 1500 minutes (the footnote on the
+chart below). `overall` correlates even more strongly with real salary
+(r = 0.84) - and in a regression, `overall` alone explains far more of the
+variance in log salary than a player's age does, so the rating is capturing a
+real, market-relevant skill signal rather than just reputation or seniority.
 
-![NBA 2K26 Overall rating vs real 2025-26 PIE, with a fitted trend line showing a strong positive correlation](images/01_overall_vs_pie.png)
-*2K26 `overall` vs real Player Impact Estimate for rotation players (500+ minutes) - higher-rated players really do produce more.*
+![NBA 2K26 Overall rating vs real 2025-26 PIE, with a fitted trend line and 95% prediction interval showing a strong positive correlation](images/01_overall_vs_pie.png)
+*2K26 `overall` vs real Player Impact Estimate for rotation players (500+ minutes), with the OLS fit and its 95% prediction interval - higher-rated players really do produce more.*
 
 ## Who does the game get wrong?
 
 Correlation is strong but far from perfect - some players' 2K rating diverges
-sharply from what their real box score says. Standardizing both `overall` and
-real PIE and taking the gap surfaces the biggest misses in each direction:
-mostly high-minutes role players whose quiet defensive/glue-guy value 2K
-under-rates (Paul Reed, Cam Spencer, several bigs), versus players carrying
-draft pedigree/reputation ahead of this season's production (Luguentz Dort,
-Dorian Finney-Smith, Zach LaVine).
+sharply from what their real box score says. The right way to ask this is
+"given how this player is rated, did they produce more or less than a *typical*
+player with that rating?", i.e. the residual from the fit above, studentized so
+every player is on a comparable scale. **Only 13 of 239 rotation players fall
+outside the 95% prediction interval** - the game is inside its own error bars
+for 95% of the league.
 
-![Horizontal bar chart of the most over- and under-rated NBA 2K26 players versus real PIE](images/04_over_under_rated.png)
-*Biggest gaps between 2K26 `overall` and real 2025-26 PIE, among rotation players - green bars are under-rated by the game, red bars are over-rated.*
+The biggest misses in each direction:
+
+| Under-rated by 2K26 (produced more than their rating predicts) | Over-rated by 2K26 (produced less) |
+|---|---|
+| Paul Reed (+3.3), Jalen Duren (+2.9), **Victor Wembanyama (+2.5)**, Day'Ron Sharpe (+2.5), Cam Spencer (+2.5), Robert Williams III (+2.4), Jalen Johnson (+2.3), **Giannis Antetokounmpo (+2.2)** | Luguentz Dort (-2.7), Dorian Finney-Smith (-2.7), Gabe Vincent (-2.2), Herbert Jones (-2.1), Spencer Jones (-1.9), Isaac Okoro (-1.8), Aaron Nesmith (-1.8), Keon Ellis (-1.7) |
+
+Two patterns: 2K systematically under-rates **high-motor bigs** whose value is
+rebounding, finishing and rim protection (Reed, Duren, Sharpe, Williams), and
+it over-rates **3-and-D wings** whose defensive reputation is real but whose
+box-score footprint is thin (Dort, Finney-Smith, Okoro, Nesmith, Ellis) - which
+is less a 2K error than a PIE blind spot, since PIE cannot see the defence
+those players are paid for.
+
+The genuine surprise is at the top. **Wembanyama and Antetokounmpo are
+under-rated even at 94 and 97 overall**: their real production runs ahead of
+what the league's rating-to-production curve predicts for players rated that
+highly. An earlier version of this analysis could not have found that, because
+it ranked players by `z(overall) - z(PIE)`, which structurally penalises anyone
+with an extreme rating (see *A note on methodology* below).
+
+![Horizontal bar chart of the most over- and under-rated NBA 2K26 players by studentized residual of real PIE on 2K26 overall](images/04_over_under_rated.png)
+*Studentized residual of real 2025-26 PIE on 2K26 `overall`, among rotation players - green is under-rated by the game, red is over-rated, black outline means the player falls outside the 95% prediction interval.*
 
 ## Do the attributes cluster into real archetypes?
 
@@ -75,16 +97,63 @@ multidimensional structure that a single label can't fully capture.
 ## Moneyball: who's actually worth their contract?
 
 Separately from the game's rating, we can ask a purely real-world question:
-given actual 2025-26 production (PIE) and actual salary, who is a team
-getting a bargain on, and who is overpaying? Standardizing production and
-log-salary and taking the gap surfaces two kinds of value: young players
-still on fixed rookie-scale deals (Victor Wembanyama), and prime-age
-players who are just outperforming their pay grade (Shai Gilgeous-Alexander),
-versus veterans being paid for a track record the current season hasn't
-backed up.
+given actual 2025-26 production and actual salary, who is a team getting a
+bargain on, and who is overpaying?
 
-![Scatter plot of real 2025-26 PIE vs real salary on a log scale, colored green to red by value gap, with top over/underpaid players labeled](images/03_moneyball_value.png)
-*Real production vs. real salary (log scale) - green points are outproducing their contract, red points are being paid more than this season's production supports.*
+The unit matters here. PIE is a *rate* - a share of the statistical events that
+happened while a player was on the floor - so comparing it directly against a
+season salary rewards anyone who played a small number of good minutes. We
+therefore measure production as **PIE x minutes**, a season impact *volume*
+that is comparable to a season salary, and score value as the residual from
+regressing log salary on log production (equivalently: dollars per PIE-minute,
+which produces the identical top and bottom eight).
+
+| Best value per dollar | Worst value per dollar |
+|---|---|
+| Kobe Brown ($9.0k/PIE-min), Neemias Queta ($10.7k), Rayan Rupert ($11.5k), Cam Spencer ($11.7k), Moussa Diabate ($12.0k), Oso Ighodaro ($14.1k), Ryan Kalkbrenner ($15.1k), Jamal Shead ($15.9k) | Jayson Tatum ($705k/PIE-min), Dorian Finney-Smith ($653k), Anthony Davis ($619k), Domantas Sabonis ($616k), Ja Morant ($579k), Jordan Poole ($500k), Zach LaVine ($417k), Jalen Green ($410k) |
+
+The honest reading of the worst-value column is **availability, not
+scouting**. Tatum, Davis, Sabonis and Morant all cleared the 500-minute
+rotation bar and then missed most of the rest of the season; a max salary
+bought 520-630 minutes. That is the single largest source of wasted payroll in
+the league, and the previous rate-based metric could not see it at all, because
+a per-possession rate does not care how many possessions you were available
+for. The best-value column is structurally dominated by the CBA's salary floor:
+a minimum contract is the same price whether the player is useless or a
+rotation regular, so any minimum-salary player who logs real minutes lands
+there. Notebook 04 repeats the exercise restricted to prime-age (25-32) players
+to strip out the rookie-scale distortion.
+
+![Scatter plot of real 2025-26 production volume (PIE x minutes) vs real salary, both on log scales, colored green to red by value score, with the best and worst value players labeled](images/03_moneyball_value.png)
+*Season impact volume (PIE x minutes) vs. real salary, both log scale - green points deliver more production per dollar than the league-wide fit predicts, red points less.*
+
+## A note on methodology
+
+Two of the headline metrics above were previously computed as a difference of
+z-scores, and both were replaced because the difference was measuring something
+other than what it claimed to. The corrected versions live in
+[`nba2k/metrics.py`](nba2k/metrics.py) and are unit-tested.
+
+**Over/under-rated was `z(overall) - z(PIE)`.** If two variables correlate at
+`r`, then `E[z(a) - z(b) | z(a)] = (1 - r) * z(a)`. At r = 0.70 that means 30%
+of a player's standardized rating passes straight through into their "gap"
+score, so the ranking was substantially a ranking of *who has an extreme
+rating*, not *who diverges from their rating*. Measured on this dataset, the
+old gap correlated **0.39 with `overall`**; the studentized residual that
+replaced it correlates **0.001**. Concretely, the old metric put Zach LaVine on
+the over-rated list mostly for being highly rated, and it was structurally
+incapable of ever calling a 97-overall player under-rated, which is why
+Antetokounmpo and Wembanyama were missing from the old list.
+
+**Moneyball was `z(PIE) - z(log salary)`**, a per-possession rate against a
+season total - see the section above.
+
+Two smaller corrections in the same spirit: k-means cluster names are now
+derived by matching centroid profiles rather than hardcoded to label indices
+(which are arbitrary and permute with a scikit-learn, BLAS or row-order
+change), and notebook 05's ~30 simultaneous correlation tests now carry
+Benjamini-Hochberg FDR control and bootstrap confidence intervals instead of a
+bare p < 0.05 green light.
 
 ## Data sources
 

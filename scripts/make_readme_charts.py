@@ -1,103 +1,108 @@
-"""
-Regenerates the 3-4 charts embedded in README.md directly from the real
-processed dataset (data/processed/players_merged.csv), using the same
-methodology as the corresponding analysis notebooks. Not run as part of the
-data pipeline -- this is a one-off/occasional utility to keep README images
-in sync with the analysis.
+"""Regenerate the four charts embedded in README.md.
+
+Every threshold, filter, attribute list and metric used here comes from the
+shared `nba2k` package, which the notebooks import too -- this script used to
+be a copy-paste fork of notebook logic, which meant a methodology fix had to be
+applied twice and the README could silently disagree with the analysis.
 
 Usage:
     python scripts/make_readme_charts.py
 """
-import numpy as np
-import pandas as pd
+
+import os
+import sys
+
 import matplotlib.pyplot as plt
+import pandas as pd
 import seaborn as sns
 from scipy import stats
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-from sklearn.cluster import KMeans
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from nba2k import (  # noqa: E402
+    MIN_MINUTES,
+    cluster_profile,
+    fit_clusters,
+    load_merged,
+    performance_sample,
+    project_pca,
+    rating_residuals,
+    value_metrics,
+    value_sample,
+)
+from nba2k.constants import CLUSTER_NAMES  # noqa: E402
+from nba2k.metrics import minutes_sensitivity  # noqa: E402
 
 sns.set_theme(style="whitegrid", palette="deep")
 plt.rcParams["figure.dpi"] = 150
 
-REFERENCE_DATE = pd.Timestamp("2025-10-01")
-OUT_DIR = "images"
+OUT_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "images"
+)
+N_LABEL = 8
 
-df = pd.read_csv("data/processed/players_merged.csv")
+df = load_merged()
 print(f"Loaded {len(df):,} players")
 
 
 # ---------------------------------------------------------------------------
-# Chart 1: NB02 - Overall rating vs real 2025-26 PIE (does the game rating
-# track real on-court impact?)
+# Chart 1: NB02 - Overall rating vs real 2025-26 PIE, with the fitted line and
+# the 95% prediction interval the over/under-rated chart is judged against.
 # ---------------------------------------------------------------------------
-perf = df[
-    (df["stats_match_score"] >= 90) & df["nba_pie"].notna() & df["nba_min"].notna()
-].copy()
-MIN_MINUTES = 500
-perf_reliable = perf[perf["nba_min"] >= MIN_MINUTES].copy()
+perf = performance_sample(df)
+res = rating_residuals(perf, x="overall", y="nba_pie")
 
-pearson_r, pearson_p = stats.pearsonr(perf_reliable["overall"], perf_reliable["nba_pie"])
-spearman_r, _ = stats.spearmanr(perf_reliable["overall"], perf_reliable["nba_pie"])
+pearson_r, _ = stats.pearsonr(res["overall"], res["nba_pie"])
+spearman_r, _ = stats.spearmanr(res["overall"], res["nba_pie"])
+
+sens = minutes_sensitivity(performance_sample(df, min_minutes=0))
+sens_note = "  ".join(
+    f"{int(row.min_minutes)}min: r={row.pearson_r:.2f} (n={int(row.n)})"
+    for row in sens.itertuples()
+)
 
 fig, ax = plt.subplots(figsize=(9, 6))
+ordered = res.sort_values("overall")
+ax.fill_between(
+    ordered["overall"], ordered["pi_low"], ordered["pi_high"],
+    color="#d62728", alpha=0.10, lw=0, label="95% prediction interval",
+)
 ax.scatter(
-    perf_reliable["overall"], perf_reliable["nba_pie"],
+    res["overall"], res["nba_pie"],
     alpha=0.5, s=35, color="#1f77b4", edgecolor="white", linewidth=0.4,
 )
-slope, intercept = np.polyfit(perf_reliable["overall"], perf_reliable["nba_pie"], 1)
-xs = np.linspace(perf_reliable["overall"].min(), perf_reliable["overall"].max(), 100)
-ax.plot(xs, slope * xs + intercept, color="#d62728", lw=2)
+ax.plot(ordered["overall"], ordered["fitted"], color="#d62728", lw=2, label="OLS fit")
 ax.set_title(
-    f"NBA 2K26 Overall vs Real PIE (minutes >= {MIN_MINUTES}, n={len(perf_reliable)})\n"
+    f"NBA 2K26 Overall vs Real PIE (minutes >= {MIN_MINUTES}, n={len(res)})\n"
     f"Pearson r={pearson_r:.2f}, Spearman rho={spearman_r:.2f}"
 )
 ax.set_xlabel("NBA 2K26 Overall Rating")
 ax.set_ylabel("2025-26 PIE (Player Impact Estimate)")
+ax.legend(loc="upper left", fontsize=9)
+ax.text(
+    0.5, -0.16, f"Not threshold-shopped - {sens_note}",
+    transform=ax.transAxes, ha="center", fontsize=7.5, color="#555555",
+)
 plt.tight_layout()
-plt.savefig(f"{OUT_DIR}/01_overall_vs_pie.png")
+plt.savefig(f"{OUT_DIR}/01_overall_vs_pie.png", bbox_inches="tight")
 plt.close()
 print("Saved 01_overall_vs_pie.png")
 
 
 # ---------------------------------------------------------------------------
-# Chart 2: NB03 - PCA projection of attribute-based k-means clusters (data-
-# driven archetypes vs 2K's designer-authored archetype labels)
+# Chart 2: NB03 - PCA projection of attribute-based k-means clusters. Cluster
+# names come from centroid profiles, not from label indices.
 # ---------------------------------------------------------------------------
-ATTRS = [
-    "agility", "ball_handle", "block", "close_shot", "defensive_consistency",
-    "defensive_rebound", "draw_foul", "driving_dunk", "free_throw", "hands",
-    "help_defense_iq", "hustle", "interior_defense", "layup", "mid_range_shot",
-    "offensive_consistency", "offensive_rebound", "overall_durability",
-    "pass_accuracy", "pass_iq", "pass_perception", "pass_vision", "perimeter_defense",
-    "post_control", "post_fade", "post_hook", "shot_iq", "speed", "speed_with_ball",
-    "stamina", "standing_dunk", "steal", "strength", "three_point_shot", "vertical",
-]
-RANDOM_STATE = 42
-cl = df.dropna(subset=ATTRS).copy()
-
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(cl[ATTRS].values)
-
-pca = PCA(n_components=2, random_state=RANDOM_STATE)
-X_pca = pca.fit_transform(X_scaled)
-cl["pca1"], cl["pca2"] = X_pca[:, 0], X_pca[:, 1]
-
-K = 7
-kmeans = KMeans(n_clusters=K, random_state=RANDOM_STATE, n_init=10).fit(X_scaled)
-cl["cluster"] = kmeans.labels_
-
-LABELS = {
-    0: "Elite Two-Way Superstars", 1: "3-and-D Connectors", 2: "Do-It-All Forwards",
-    3: "Shot-Creating Lead Guards", 4: "Skilled Post Bigs",
-    5: "Movement Shooters/Bench Guards", 6: "Rim-Running Bigs",
-}
-cl["cluster_label"] = cl["cluster"].map(LABELS)
+cl, info = fit_clusters(df)
+coords, pca = project_pca(info)
+cl["pca1"], cl["pca2"] = coords[:, 0], coords[:, 1]
+print("Cluster naming (label -> archetype):")
+for label, name in sorted(info["mapping"].items()):
+    print(f"  {label} -> {name}")
 
 fig, ax = plt.subplots(figsize=(10, 7.5))
 sns.scatterplot(
-    data=cl, x="pca1", y="pca2", hue="cluster_label",
-    hue_order=[LABELS[c] for c in range(K)],
+    data=cl, x="pca1", y="pca2", hue="cluster_label", hue_order=CLUSTER_NAMES,
     palette="tab10", alpha=0.75, s=55, edgecolor="white", linewidth=0.4, ax=ax,
 )
 ax.set_title("PCA Projection of NBA 2K26 Attribute-Based Clusters (k=7)")
@@ -108,79 +113,75 @@ plt.tight_layout()
 plt.savefig(f"{OUT_DIR}/02_clusters_pca.png")
 plt.close()
 print("Saved 02_clusters_pca.png")
+print(cluster_profile(cl, info)["count"].to_string())
 
 
 # ---------------------------------------------------------------------------
-# Chart 3: NB04 - Moneyball: real production (PIE) vs real salary
+# Chart 3: NB04 - Moneyball. Production is PIE x minutes (an impact volume
+# comparable to a season salary), not PIE alone.
 # ---------------------------------------------------------------------------
-val = df[
-    (df["salary_match_score"] >= 90) & df["salary_usd"].notna() & (df["salary_usd"] > 0)
-    & (df["stats_match_score"] >= 90) & df["nba_pie"].notna()
-    & (df["nba_min"] >= 500)
-].copy()
-val["log_salary"] = np.log10(val["salary_usd"])
-
-def zscore(s):
-    return (s - s.mean()) / s.std()
-
-val["pie_z"] = zscore(val["nba_pie"])
-val["salary_z"] = zscore(val["log_salary"])
-val["value_gap"] = val["pie_z"] - val["salary_z"]
+val = value_metrics(value_sample(df))
 
 fig, ax = plt.subplots(figsize=(10, 7))
 sc = ax.scatter(
-    val["salary_usd"] / 1e6, val["nba_pie"], c=val["value_gap"],
+    val["salary_usd"] / 1e6, val["pie_minutes"], c=val["value_score"],
     cmap="RdYlGn", s=45, alpha=0.85, edgecolor="white", linewidth=0.3,
 )
 ax.set_xscale("log")
+ax.set_yscale("log")
 ax.set_xlabel("2025-26 Salary ($M, log scale)")
-ax.set_ylabel("2025-26 PIE")
+ax.set_ylabel("Season impact volume: PIE x minutes (log scale)")
 ax.set_title(
-    "Real Production (PIE) vs. Real Salary\n"
-    "(green = underpaid for production, red = overpaid)"
+    "Real Production Volume vs. Real Salary\n"
+    "(green = more production per dollar than the league fit predicts)"
 )
 cbar = plt.colorbar(sc, ax=ax)
-cbar.set_label("Value gap (production z - salary z)")
+cbar.set_label("Value score (-studentized residual of log salary on log production)")
 
-for _, row in val.nlargest(6, "value_gap").iterrows():
-    ax.annotate(row["name"], (row["salary_usd"] / 1e6, row["nba_pie"]), fontsize=8,
+for _, row in val.nlargest(6, "value_score").iterrows():
+    ax.annotate(row["name"], (row["salary_usd"] / 1e6, row["pie_minutes"]), fontsize=8,
                 xytext=(5, 5), textcoords="offset points")
-for _, row in val.nsmallest(6, "value_gap").iterrows():
-    ax.annotate(row["name"], (row["salary_usd"] / 1e6, row["nba_pie"]), fontsize=8,
+for _, row in val.nsmallest(6, "value_score").iterrows():
+    ax.annotate(row["name"], (row["salary_usd"] / 1e6, row["pie_minutes"]), fontsize=8,
                 xytext=(5, -10), textcoords="offset points")
 plt.tight_layout()
 plt.savefig(f"{OUT_DIR}/03_moneyball_value.png")
 plt.close()
 print("Saved 03_moneyball_value.png")
+print("Best value:", ", ".join(val.nlargest(N_LABEL, "value_score")["name"]))
+print("Worst value:", ", ".join(val.nsmallest(N_LABEL, "value_score")["name"]))
 
 
 # ---------------------------------------------------------------------------
-# Chart 4: NB02 - Most over/under-rated players (2K26 Overall vs real PIE gap)
+# Chart 4: NB02 - Most over/under-rated players, ranked by studentized residual
+# from the PIE-on-overall fit rather than by a z-score difference.
 # ---------------------------------------------------------------------------
-def zscore2(s):
-    return (s - s.mean()) / s.std()
+top_over = res.nsmallest(N_LABEL, "studentized")
+top_under = res.nlargest(N_LABEL, "studentized")
+combined = pd.concat([top_over, top_under]).sort_values("studentized")
 
-perf_flag = perf_reliable.copy()
-perf_flag["overall_z"] = zscore2(perf_flag["overall"])
-perf_flag["pie_z"] = zscore2(perf_flag["nba_pie"])
-perf_flag["gap"] = perf_flag["overall_z"] - perf_flag["pie_z"]
-
-top_over = perf_flag.sort_values("gap", ascending=False).head(8)
-top_under = perf_flag.sort_values("gap").head(8)
-combined = pd.concat([top_under, top_over]).sort_values("gap")
-
-fig, ax = plt.subplots(figsize=(9, 7))
-colors = ["#2ca02c" if g < 0 else "#d62728" for g in combined["gap"]]
-ax.barh(combined["name"], combined["gap"], color=colors)
+fig, ax = plt.subplots(figsize=(9.5, 7))
+colors = ["#d62728" if s < 0 else "#2ca02c" for s in combined["studentized"]]
+bars = ax.barh(combined["name"], combined["studentized"], color=colors)
+for bar, outside in zip(bars, combined["outside_pi"]):
+    if outside:
+        bar.set_edgecolor("black")
+        bar.set_linewidth(1.1)
 ax.axvline(0, color="black", lw=0.8)
-ax.set_xlabel("Gap: standardized Overall - standardized real PIE")
+ax.axvline(-2, color="grey", lw=0.7, ls="--")
+ax.axvline(2, color="grey", lw=0.7, ls="--")
+ax.set_xlabel("Studentized residual of real PIE on 2K26 Overall")
 ax.set_title(
     "Most Over- and Under-Rated Players by NBA 2K26\n"
-    "(vs. real 2025-26 PIE, rotation players only, green = under-rated, red = over-rated)"
+    f"(vs. real 2025-26 PIE, {MIN_MINUTES}+ minutes; green = under-rated, "
+    "red = over-rated;\nblack outline = outside the 95% prediction interval)"
 )
 plt.tight_layout()
 plt.savefig(f"{OUT_DIR}/04_over_under_rated.png")
 plt.close()
 print("Saved 04_over_under_rated.png")
+print("Over-rated:", ", ".join(top_over["name"]))
+print("Under-rated:", ", ".join(top_under["name"]))
+print(f"{int(res['outside_pi'].sum())} of {len(res)} players fall outside the 95% PI")
 
 print("Done.")
