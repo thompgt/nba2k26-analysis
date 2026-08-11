@@ -122,6 +122,7 @@ backed up.
 
 ```
 scripts/                     data acquisition + processing pipeline
+  polite_http.py               robots.txt-aware, identifying, backing-off HTTP layer
   scrape_2k_ratings.py         scrapes NBA 2K26 player attributes via Wayback Machine
   fetch_nba_stats.py           pulls real 2025-26 season stats via nba_api
   scrape_salary.py             scrapes 2025-26 salaries from HoopsHype (per-team pages)
@@ -152,9 +153,33 @@ jupyter notebook
 ```
 
 No API keys are required for any of these - `nba_api` hits stats.nba.com's
-public JSON endpoints directly, and the two scrapers use `curl_cffi`'s Chrome
-TLS impersonation (plain `requests` gets a 403 from 2kratings.com/the Wayback
-Machine's edge fairly often; `curl_cffi` reliably gets 200s).
+public JSON endpoints directly.
+
+### Scraping policy
+
+The two scrapers do use `curl_cffi`'s Chrome TLS impersonation, because plain
+`requests` gets a 403 from 2kratings.com / the Wayback Machine's edge fairly
+often. That is bot *detection* evasion, not paywall or login evasion, and it is
+the one concession this project makes. Everything around it is deliberately
+well-behaved, via `scripts/polite_http.py`:
+
+- **robots.txt is fetched and honoured** before every request (checked at time
+  of writing: both `web.archive.org` and `hoopshype.com` allow the paths used
+  here). Set `RESPECT_ROBOTS=0` only if you know what you are doing.
+- **Requests identify themselves**: the `User-Agent` and `From` headers carry
+  this repository's URL and a contact email address, so anyone seeing the
+  traffic can find out what it is and ask us to stop.
+- **Rate limiting** respects any `Crawl-delay` the host declares, with a floor
+  of 0.5s (archive) / 1.0s (HoopsHype) between requests.
+- **429 and 5xx responses are retried with exponential backoff** (honouring
+  `Retry-After`) and eventually raise, instead of being handed to the HTML
+  parser and silently written out as an empty row - the previous behaviour.
+
+Each scraped ratings row also records the exact Internet Archive capture it
+came from (`wayback_ts`, `snapshot_url`) so the "these are launch ratings"
+caveat below is checkable from the data rather than taken on trust. The
+committed `data/processed/` extract predates that change and does not carry
+those columns; they populate on the next scrape.
 
 ## Limitations to keep in mind
 

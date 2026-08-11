@@ -18,7 +18,10 @@ So this script:
 
   1. Queries the Wayback Machine CDX API for all `2kratings.com/<player-slug>`
      captures between 2025-08-01 and 2026-03-01 (the NBA 2K26 window), picking
-     one capture per player.
+     one capture per player. The chosen capture timestamp and full snapshot URL
+     are written through to the output as `wayback_ts` / `snapshot_url`, so the
+     "these are mostly launch ratings" claim is checkable from the data and two
+     runs of this script can be diffed capture-for-capture.
   2. Fetches each archived snapshot (`id_` flag = raw, unrewritten HTML).
   3. Verifies the page title says "NBA 2K26" (skips anything that doesn't,
      e.g. a stray early/late capture that slipped in already labeled 2K27).
@@ -34,6 +37,12 @@ crawled). This gives a real but incomplete slice of the league -- expect
 roughly 350-450 players out of ~550 on active NBA rosters. This is documented
 again in the README and notebooks.
 
+Politeness: all fetching goes through `polite_http.get()`, which checks
+robots.txt, sends a User-Agent carrying this project's URL and a contact
+address, honours any declared Crawl-delay, and backs off on 429/5xx instead of
+handing an error page to the parser. See that module's docstring for why Chrome
+TLS impersonation is still required.
+
 Output: data/raw/2k26_ratings.csv
 """
 
@@ -43,13 +52,12 @@ import os
 import re
 import time
 
-from curl_cffi import requests as creq
+from polite_http import FetchError, RobotsDisallowed, crawl_delay, get
 
 CDX_URL = (
     "https://web.archive.org/cdx/search/cdx?url=2kratings.com&matchType=domain"
     "&output=json&from=20250801&to=20260301&filter=statuscode:200&collapse=urlkey&limit=200000"
 )
-IMPERSONATE = "chrome124"
 SLEEP = 0.5
 
 # Non-player paths / list pages / category pages we don't want to treat as player slugs.
@@ -70,18 +78,6 @@ CATEGORIES = [
 
 RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
 OUT_PATH = os.path.join(RAW_DIR, "2k26_ratings.csv")
-
-
-def get(url, timeout=30, retries=3):
-    last_err = None
-    for _ in range(retries):
-        try:
-            r = creq.get(url, impersonate=IMPERSONATE, timeout=timeout)
-            return r
-        except Exception as e:
-            last_err = e
-            time.sleep(2)
-    raise last_err
 
 
 def discover_player_slugs():
@@ -238,7 +234,7 @@ def parse_attributes(soup):
     return attrs
 
 
-def parse_player_page(slug, html):
+def parse_player_page(slug, html, wayback_ts=None, snapshot_url=None):
     from bs4 import BeautifulSoup
 
     soup = BeautifulSoup(html, "html.parser")
@@ -250,7 +246,15 @@ def parse_player_page(slug, html):
     name = title.split(" NBA 2K26")[0].strip()
     text = soup.get_text("|", strip=True)
 
-    row = {"slug": slug, "name": name}
+    # Persist which archive capture this row came from. Without it the README's
+    # central caveat ("mostly launch ratings, Aug 2025") is unverifiable from
+    # the data, and two runs of this scraper are not comparable.
+    row = {
+        "slug": slug,
+        "name": name,
+        "wayback_ts": wayback_ts,
+        "snapshot_url": snapshot_url,
+    }
     row.update(parse_bio(soup, text))
 
     # Overall rating: the bio card's badge row reads "...|<n>|OVERALL|..."
@@ -272,11 +276,16 @@ def main():
 
     rows = []
     skipped = []
+    delay = max(SLEEP, crawl_delay("https://web.archive.org/", default=SLEEP))
     for i, (slug, ts) in enumerate(sorted(slug_to_ts.items())):
         url = f"https://web.archive.org/web/{ts}id_/https://www.2kratings.com/{slug}"
         try:
             r = get(url, timeout=30)
-        except Exception as e:
+        except RobotsDisallowed as e:
+            print(f"  [{i+1}/{len(slug_to_ts)}] {slug}: SKIPPED ({e})")
+            skipped.append(slug)
+            continue
+        except FetchError as e:
             print(f"  [{i+1}/{len(slug_to_ts)}] {slug}: FAILED ({e})")
             skipped.append(slug)
             continue
@@ -286,7 +295,7 @@ def main():
             continue
 
         try:
-            row, title = parse_player_page(slug, r.text)
+            row, title = parse_player_page(slug, r.text, wayback_ts=ts, snapshot_url=url)
         except Exception as e:
             print(f"  [{i+1}/{len(slug_to_ts)}] {slug}: parse error ({e})")
             skipped.append(slug)
@@ -300,7 +309,7 @@ def main():
         rows.append(row)
         if (i + 1) % 25 == 0:
             print(f"  [{i+1}/{len(slug_to_ts)}] ...{len(rows)} parsed so far")
-        time.sleep(SLEEP)
+        time.sleep(delay)
 
     print(f"Parsed {len(rows)} players, skipped {len(skipped)}")
 
@@ -309,7 +318,8 @@ def main():
         fieldnames.update(row.keys())
     # Keep a stable, readable column order: identity/bio first, then attributes.
     preferred = [
-        "slug", "name", "team", "nationality", "position", "position2", "archetype",
+        "slug", "name", "wayback_ts", "snapshot_url",
+        "team", "nationality", "position", "position2", "archetype",
         "height_ftin", "height_cm", "weight_lb", "weight_kg", "wingspan_ftin", "wingspan_cm",
         "years_in_nba", "birthdate", "hometown", "college", "jersey",
         "overall", "potential_grade", "total_attributes", "intangibles",
