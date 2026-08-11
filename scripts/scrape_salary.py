@@ -13,6 +13,11 @@ league-wide one.
 salaries, e.g. Jayson Tatum's $54,126,450 figure for `season=2026`, which
 matches his actual reported 2025-26 salary).
 
+Politeness: fetching goes through `polite_http.get()`, which checks robots.txt,
+sends an identifying User-Agent with a contact address, honours any declared
+Crawl-delay, and retries 429/5xx with backoff rather than parsing an error page
+into empty rows.
+
 Output: data/raw/nba_salaries_2025_26.csv
 """
 
@@ -21,8 +26,9 @@ import json
 import os
 import time
 
-from curl_cffi import requests as creq
 from bs4 import BeautifulSoup
+
+from polite_http import FetchError, RobotsDisallowed, crawl_delay, get
 
 TEAM_SLUGS = [
     "atlanta_hawks", "boston_celtics", "brooklyn_nets", "charlotte_hornets",
@@ -37,26 +43,14 @@ TEAM_SLUGS = [
 ]
 
 SALARY_SEASON = 2026  # season ending in 2026 = the 2025-26 season
-IMPERSONATE = "chrome124"
 SLEEP = 1.0
 
 RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "raw")
 OUT_PATH = os.path.join(RAW_DIR, "nba_salaries_2025_26.csv")
 
 
-def get(url, retries=3):
-    last_err = None
-    for _ in range(retries):
-        try:
-            return creq.get(url, impersonate=IMPERSONATE, timeout=25)
-        except Exception as e:
-            last_err = e
-            time.sleep(3)
-    raise last_err
-
-
 def team_salaries(team_slug):
-    r = get(f"https://hoopshype.com/salaries/{team_slug}/")
+    r = get(f"https://hoopshype.com/salaries/{team_slug}/", timeout=25)
     if r.status_code != 200:
         print(f"  {team_slug}: HTTP {r.status_code}")
         return []
@@ -100,16 +94,21 @@ def main():
         "player_option", "team_option", "two_way_contract",
     ]
 
+    delay = max(SLEEP, crawl_delay("https://hoopshype.com/", default=SLEEP))
+
     all_rows = []
     for i, slug in enumerate(TEAM_SLUGS):
         try:
             rows = team_salaries(slug)
+        except (RobotsDisallowed, FetchError) as e:
+            print(f"  {slug}: FAILED ({e})")
+            rows = []
         except Exception as e:
             print(f"  {slug}: FAILED ({e})")
             rows = []
         print(f"[{i+1}/{len(TEAM_SLUGS)}] {slug}: {len(rows)} players")
         all_rows.extend(rows)
-        time.sleep(SLEEP)
+        time.sleep(delay)
 
     with open(OUT_PATH, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
