@@ -2,7 +2,10 @@
   "players_2k26": 377,
   "nba_stats_players": 582,
   "salary_players": 507,
-  "matched_to_nba_stats": 313,
-  "matched_to_salary": 238,
-  "matched_to_both": 238
+  "matched_to_nba_stats": 315,
+  "matched_to_salary": 246,
+  "matched_to_both": 241,
+  "stats_matches_via_fallback": 2,
+  "salary_matches_via_fallback": 8,
+  "split_season_salaries": 2
 }
