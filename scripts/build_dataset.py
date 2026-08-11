@@ -306,6 +306,17 @@ def main():
         "split_season_salaries": int((merged["salary_rows"] > 1).sum()),
     }
 
+    # Coverage table: every player with real 2025-26 stats, flagged for whether
+    # they made it into the 2K26 rated pool. Small enough to track in git, and
+    # it turns the README's "the pool skews toward notable players" caveat into
+    # something a reader can check (see notebook 02).
+    coverage_cols = ["PLAYER_ID", "PLAYER_NAME", "AGE", "GP", "MIN", "PTS", "PIE"]
+    coverage = stats[[c for c in coverage_cols if c in stats.columns]].copy()
+    coverage["is_rated"] = coverage["PLAYER_ID"].isin(
+        set(merged["nba_player_id"].dropna().astype(int))
+    )
+    coverage.to_csv(os.path.join(PROC_DIR, "stats_coverage.csv"), index=False)
+
     merged.to_csv(os.path.join(PROC_DIR, "players_merged.csv"), index=False)
     with open(os.path.join(PROC_DIR, "match_stats.json"), "w") as f:
         json.dump(match_stats, f, indent=2)
